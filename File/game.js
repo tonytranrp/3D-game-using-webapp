@@ -1,11 +1,12 @@
-// First, define the Cube class
 class Cube {
     constructor(width, height, depth, x, y, z, color) {
         this.geometry = new THREE.BoxGeometry(width, height, depth);
         this.material = new THREE.MeshStandardMaterial({
             color: color,
             roughness: 0.7,
-            metalness: 0.3
+            metalness: 0.3,
+            envMapIntensity: 1.0,
+            dithering: true
         });
         this.mesh = new THREE.Mesh(this.geometry, this.material);
         this.mesh.position.set(x, y, z);
@@ -15,7 +16,9 @@ class Cube {
     }
 
     updateBoundingBox() {
-        this.boundingBox.setFromObject(this.mesh);
+        if(this.mesh && this.boundingBox) {
+            this.boundingBox.setFromObject(this.mesh);
+        }
     }
 }
 
@@ -87,21 +90,42 @@ function updatePlayerCollider() {
 }
 
 function setupLights() {
+    // Enhanced ambient light
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    // Enhanced directional light (sun)
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
     dirLight.position.set(100, 100, 50);
+    
+    // Enhanced shadow settings
     dirLight.castShadow = true;
-    dirLight.shadow.mapSize.width = 2048;
-    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.mapSize.width = 4096;  // Increased resolution
+    dirLight.shadow.mapSize.height = 4096; // Increased resolution
     dirLight.shadow.camera.near = 0.5;
     dirLight.shadow.camera.far = 500;
     dirLight.shadow.camera.left = -100;
     dirLight.shadow.camera.right = 100;
     dirLight.shadow.camera.top = 100;
     dirLight.shadow.camera.bottom = -100;
+    dirLight.shadow.bias = -0.0001;
+    dirLight.shadow.normalBias = 0.02;
+    dirLight.shadow.radius = 1.5;
+    
     scene.add(dirLight);
+
+    // Add hemisphere light for better ambient lighting
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
+    hemiLight.position.set(0, 20, 0);
+    scene.add(hemiLight);
+
+    // Add point lights for enhanced lighting
+    const pointLight1 = new THREE.PointLight(0xffffff, 0.5, 50);
+    pointLight1.position.set(10, 10, 10);
+    pointLight1.castShadow = true;
+    pointLight1.shadow.mapSize.width = 1024;
+    pointLight1.shadow.mapSize.height = 1024;
+    scene.add(pointLight1);
 }
 
 function createSun() {
@@ -116,8 +140,8 @@ function createFloor() {
     const floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
     
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
+    canvas.width = 1024; // Increased texture resolution
+    canvas.height = 1024;
     const context = canvas.getContext('2d');
     
     for(let x = 0; x < canvas.width; x++) {
@@ -131,10 +155,16 @@ function createFloor() {
     }
     
     const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(4, 4);
+    
     const floorMaterial = new THREE.MeshStandardMaterial({ 
         map: texture,
         roughness: 0.8,
-        metalness: 0.2
+        metalness: 0.2,
+        envMapIntensity: 1.0,
+        dithering: true
     });
     
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
@@ -142,7 +172,6 @@ function createFloor() {
     floor.receiveShadow = true;
     scene.add(floor);
 }
-
 function createObstacles() {
     for(let i = 0; i < 50; i++) {
         const width = Math.random() * 4 + 1;
@@ -411,7 +440,14 @@ function animate() {
     requestAnimationFrame(animate);
     TWEEN.update();
     updateMovement();
-    obstacles.forEach(obstacle => obstacle.updateBoundingBox());
+    
+    // Fix the obstacle updating
+    for(const obstacle of obstacles) {
+        if(obstacle && obstacle.updateBoundingBox) {
+            obstacle.updateBoundingBox();
+        }
+    }
+    
     renderer.render(scene, camera);
 }
 
@@ -419,18 +455,32 @@ function init() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
     
+    // Enhanced camera settings
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
     camera.position.y = 2;
     
+    // Enhanced renderer settings
     renderer = new THREE.WebGLRenderer({ 
         antialias: true,
         powerPreference: "high-performance",
-        precision: "highp"
+        precision: "highp",
+        stencil: true,
+        depth: true,
+        logarithmicDepthBuffer: true
     });
+    
+    // Set high resolution
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Balance performance and quality
+    
+    // Enhanced shadow settings
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    
     document.body.appendChild(renderer.domElement);
 
     setupLights();
