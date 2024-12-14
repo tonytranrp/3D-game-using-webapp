@@ -42,13 +42,27 @@ let lastTime = performance.now();
 let walkCycle = 0;
 let isMoving = false;
 let lastPlayerRotation = new THREE.Euler();
-
+let car;
+let loadingManager = new THREE.LoadingManager();
+let loadingScreen = document.getElementById('loading-screen');
+let progressBar = document.querySelector('.progress');
+let gameMenu;
+let isGamePaused = false;
 // Constants
 const PLAYER_WIDTH = 0.6;
 const PLAYER_HEIGHT = 1.8;
 const PLAYER_DEPTH = 0.6;
 const MOVEMENT_SPEED = 0.1;
+loadingManager.onProgress = function(url, loaded, total) {
+    const progress = (loaded / total * 100);
+    progressBar.style.width = progress + '%';
+};
 
+loadingManager.onLoad = function() {
+    setTimeout(() => {
+        loadingScreen.style.display = 'none';
+    }, 500);
+};
 // Define all functions before using them
 function setupCollision() {
     // Create player hitbox
@@ -74,7 +88,37 @@ function setupCollision() {
     playerCollider = new THREE.Box3();
     updatePlayerCollider();
 }
-
+function loadCar() {
+    const loader = new THREE.GLTFLoader(loadingManager);
+    loader.load('models/old_rusty_car.glb', function(gltf) {
+        car = gltf.scene;
+        
+        // Scale reduced to 0.05 (4 times smaller than 0.2)
+        car.scale.set(0.05, 0.05, 0.05);
+        
+        // Adjust y position for the new scale
+        car.position.set(10, 0.5, 10); // Lowered y to 0.5 to match new scale
+        
+        // Add shadows
+        car.traverse((node) => {
+            if (node.isMesh) {
+                node.castShadow = true;
+                node.receiveShadow = true;
+                if (node.material) {
+                    node.material.metalness = 0.7;
+                    node.material.roughness = 0.3;
+                }
+            }
+        });
+        scene.add(car);
+    }, 
+    function(xhr) {
+        console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+    },
+    function(error) {
+        console.error('An error happened:', error);
+    });
+}
 function updatePlayerCollider() {
     playerCollider.setFromCenterAndSize(
         camera.position,
@@ -438,21 +482,24 @@ function updateMovement() {
 
 function animate() {
     requestAnimationFrame(animate);
-    TWEEN.update();
-    updateMovement();
     
-    // Fix the obstacle updating
-    for(const obstacle of obstacles) {
-        if(obstacle && obstacle.updateBoundingBox) {
-            obstacle.updateBoundingBox();
+    if (!isGamePaused) {
+        TWEEN.update();
+        updateMovement();
+        
+        for(const obstacle of obstacles) {
+            if(obstacle && obstacle.updateBoundingBox) {
+                obstacle.updateBoundingBox();
+            }
         }
+        
+        renderer.render(scene, camera);
     }
-    
-    renderer.render(scene, camera);
 }
 
 function init() {
     scene = new THREE.Scene();
+    gameMenu = new GameMenu();
     scene.background = new THREE.Color(0x87CEEB);
     
     // Enhanced camera settings
@@ -490,7 +537,32 @@ function init() {
     setupCollision();
     createPlayerModel();
     setupControls();
-    
+    loadCar(); // Add this line
+    // bruh the esc menu
+    document.addEventListener('keydown', (event) => {
+        if (event.code === 'Escape' && !event.repeat) {  // Add !event.repeat to prevent multiple triggers
+            gameMenu.toggleMenu();
+            if (gameMenu.isMenuVisible()) {
+                isGamePaused = true;
+            } else {
+                isGamePaused = false;
+                lastTime = performance.now(); // Reset time delta
+            }
+        }
+    });
+
+    // Update the game resume event listener
+    document.addEventListener('gameResumed', () => {
+        isGamePaused = false;
+        lastTime = performance.now(); // Reset time delta
+        document.body.requestPointerLock();  // Ensure pointer is locked again
+    });
+
+    // Update the game pause event listener
+    document.addEventListener('gamePaused', () => {
+        isGamePaused = true;
+        document.exitPointerLock();  // Release pointer lock
+    });
     window.addEventListener('resize', onWindowResize, false);
 }
 
