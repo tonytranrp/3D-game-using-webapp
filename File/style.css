@@ -1,16 +1,30 @@
 /* Base styles */
-body { 
-    cursor: none;
-    margin: 0;
+html, body {
     overflow: hidden;
-    -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
-    user-select: none;
+    height: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 canvas { 
     display: block; 
+}
+#interaction-prompt {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-family: Arial, sans-serif;
+    font-size: 18px;
+    font-weight: bold;
+    pointer-events: none;
+    z-index: 1000;
+    border: 2px solid white;
+    text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
 }
 
 /* Loading screen */
