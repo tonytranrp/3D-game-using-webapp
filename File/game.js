@@ -1,4 +1,92 @@
-// Car class definition
+
+// Cube class for obstacles
+class Cube {
+    constructor(width, height, depth, x, y, z, color) {
+        this.geometry = new THREE.BoxGeometry(width, height, depth);
+        this.material = new THREE.MeshStandardMaterial({
+            color: color,
+            roughness: 0.7,
+            metalness: 0.3,
+        });
+        this.mesh = new THREE.Mesh(this.geometry, this.material);
+        this.mesh.position.set(x, y, z);
+        this.mesh.castShadow = true;
+        this.mesh.receiveShadow = true;
+    }
+}
+
+// Global variables
+let camera, scene, renderer;
+let moveForward = false;
+let moveBackward = false;
+let moveLeft = false;
+let moveRight = false;
+let moveUp = false;
+let moveDown = false;
+let isMoving = false;
+let isDriving = false;
+let car;
+let gameMenu;
+let isGamePaused = false;
+let obstacles = [];
+let lastTime = performance.now();
+
+// Constants
+const MOVEMENT_SPEED = 0.1;
+let isNearCar = false;
+let carInteractionDistance = 4;
+let points = 0;
+const POINTS_TO_WIN = 1000;
+const POINTS_PER_SECOND_ON_ROAD = 5;
+const POINTS_LOSS_OFF_ROAD = -10;
+let isOnRoad = false;
+let gameStatus = 'playing'; // 'playing', 'won', 'failed'
+let lastPointUpdate = 0;
+
+class Road {
+    constructor() {
+        this.createRoad();
+    }
+
+    createRoad() {
+        // Main road
+        const roadGeometry = new THREE.PlaneGeometry(10, 200);
+        const roadMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x333333,
+            roughness: 0.8,
+        });
+        this.road = new THREE.Mesh(roadGeometry, roadMaterial);
+        this.road.rotation.x = -Math.PI / 2;
+        this.road.position.y = 0.01; // Slightly above ground to prevent z-fighting
+        
+        // Road markings
+        const lineGeometry = new THREE.PlaneGeometry(0.3, 200);
+        const lineMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xFFFFFF,
+            roughness: 0.5
+        });
+        
+        this.centerLine = new THREE.Mesh(lineGeometry, lineMaterial);
+        this.centerLine.rotation.x = -Math.PI / 2;
+        this.centerLine.position.y = 0.02;
+
+        // Add to group
+        this.object = new THREE.Group();
+        this.object.add(this.road);
+        this.object.add(this.centerLine);
+    }
+
+    isPointOnRoad(point) {
+        // Convert point to road's local space
+        const localPoint = point.clone().sub(this.object.position);
+        localPoint.applyQuaternion(this.object.quaternion.clone().invert());
+        
+        // Check if point is within road bounds
+        return Math.abs(localPoint.x) < 5 && Math.abs(localPoint.z) < 100;
+    }
+}
+
+// Enhance Car class
 class Car {
     constructor(x, y, z) {
         this.object = new THREE.Group();
@@ -45,57 +133,109 @@ class Car {
 
         // Position the entire car
         this.object.position.set(x, y, z);
+        
+        // Car properties
+        this.speed = 0;
+        this.maxSpeed = 0.3;
+        this.acceleration = 0.01;
+        this.deceleration = 0.005;
+        this.turnSpeed = 0.03;
     }
 
     update() {
         if (isDriving) {
+            // Update speed
             if (moveForward) {
-                this.wheels.forEach(wheel => wheel.rotation.x += 0.2);
+                this.speed = Math.min(this.speed + this.acceleration, this.maxSpeed);
             } else if (moveBackward) {
-                this.wheels.forEach(wheel => wheel.rotation.x -= 0.2);
+                this.speed = Math.max(this.speed - this.acceleration, -this.maxSpeed/2);
+            } else {
+                if (this.speed > 0) {
+                    this.speed = Math.max(0, this.speed - this.deceleration);
+                } else if (this.speed < 0) {
+                    this.speed = Math.min(0, this.speed + this.deceleration);
+                }
             }
+
+            // Apply movement
+            if (this.speed !== 0) {
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.object.quaternion);
+                this.object.position.addScaledVector(forward, this.speed);
+
+                // Update wheel rotation
+                const wheelSpeed = this.speed * 5;
+                this.wheels.forEach(wheel => wheel.rotation.x += wheelSpeed);
+            }
+
+            // Apply turning
+            if (moveLeft) this.object.rotation.y += this.turnSpeed;
+            if (moveRight) this.object.rotation.y -= this.turnSpeed;
         }
     }
 }
 
-// Cube class for obstacles
-class Cube {
-    constructor(width, height, depth, x, y, z, color) {
-        this.geometry = new THREE.BoxGeometry(width, height, depth);
-        this.material = new THREE.MeshStandardMaterial({
-            color: color,
-            roughness: 0.7,
-            metalness: 0.3,
-        });
-        this.mesh = new THREE.Mesh(this.geometry, this.material);
-        this.mesh.position.set(x, y, z);
-        this.mesh.castShadow = true;
-        this.mesh.receiveShadow = true;
+// Enhanced game state management
+function updateGameState() {
+    if (gameStatus !== 'playing') return;
+
+    const currentTime = performance.now();
+    if (currentTime - lastPointUpdate > 1000) { // Update points every second
+        lastPointUpdate = currentTime;
+        
+        if (isDriving) {
+            isOnRoad = road.isPointOnRoad(car.object.position);
+            points += isOnRoad ? POINTS_PER_SECOND_ON_ROAD : POINTS_LOSS_OFF_ROAD;
+            
+            // Check win/lose conditions
+            if (points >= POINTS_TO_WIN) {
+                gameStatus = 'won';
+                showGameEndScreen('Congratulations! You got your license!');
+            } else if (points < -500) {
+                gameStatus = 'failed';
+                showGameEndScreen('Failed! Too many penalties!');
+            }
+            
+            updatePointsDisplay();
+        }
     }
 }
 
-// Global variables
-let camera, scene, renderer;
-let moveForward = false;
-let moveBackward = false;
-let moveLeft = false;
-let moveRight = false;
-let moveUp = false;
-let moveDown = false;
-let isMoving = false;
-let isDriving = false;
-let car;
-let gameMenu;
-let isGamePaused = false;
-let obstacles = [];
-let lastTime = performance.now();
+function showGameEndScreen(message) {
+    const endScreen = document.createElement('div');
+    endScreen.style.position = 'fixed';
+    endScreen.style.top = '50%';
+    endScreen.style.left = '50%';
+    endScreen.style.transform = 'translate(-50%, -50%)';
+    endScreen.style.background = 'rgba(0, 0, 0, 0.8)';
+    endScreen.style.color = 'white';
+    endScreen.style.padding = '20px';
+    endScreen.style.borderRadius = '10px';
+    endScreen.style.textAlign = 'center';
+    endScreen.innerHTML = `
+        <h2>${message}</h2>
+        <p>Final Score: ${points}</p>
+        <button onclick="location.reload()">Try Again</button>
+    `;
+    document.body.appendChild(endScreen);
+}
 
-// Constants
-const MOVEMENT_SPEED = 0.1;
-let isNearCar = false;
-let carInteractionDistance = 4;
+function updatePointsDisplay() {
+    if (!pointsDisplay) {
+        pointsDisplay = document.createElement('div');
+        pointsDisplay.style.position = 'fixed';
+        pointsDisplay.style.top = '20px';
+        pointsDisplay.style.right = '20px';
+        pointsDisplay.style.background = 'rgba(0, 0, 0, 0.7)';
+        pointsDisplay.style.color = 'white';
+        pointsDisplay.style.padding = '10px';
+        pointsDisplay.style.borderRadius = '5px';
+        document.body.appendChild(pointsDisplay);
+    }
+    pointsDisplay.innerHTML = `Points: ${points}/${POINTS_TO_WIN}<br>Status: ${isOnRoad ? 'On Road' : 'Off Road'}`;
+}
 
-// Add this function
+let road;
+let pointsDisplay;
 function createInteractionPrompt() {
     const prompt = document.createElement('div');
     prompt.id = 'interaction-prompt';
@@ -208,12 +348,21 @@ function createSun() {
 }
 
 function createFloor() {
+    const textureLoader = new THREE.TextureLoader();
+    
+    // Load the grass texture - update path to your texture
+    const grassTexture = textureLoader.load('models/grass2k.jpg');
+    grassTexture.wrapS = THREE.RepeatWrapping;
+    grassTexture.wrapT = THREE.RepeatWrapping;
+    grassTexture.repeat.set(50, 50); // Adjust based on your texture size
+    
     const floorGeometry = new THREE.PlaneGeometry(2000, 2000);
     const floorMaterial = new THREE.MeshStandardMaterial({ 
-        color: 0x808080,
-        roughness: 0.8,
-        metalness: 0.2
+        map: grassTexture,
+        roughness: 1.0,
+        metalness: 0.0
     });
+    
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
     floor.rotation.x = -Math.PI / 2;
     floor.receiveShadow = true;
@@ -317,6 +466,7 @@ function animate() {
     if (!isGamePaused) {
         updatePlayerMovement();
         if (car) car.update();
+        updateGameState();
         renderer.render(scene, camera);
     }
 }
@@ -339,8 +489,18 @@ function init() {
     createSun();
     createFloor();
     createObstacles();
-    createCar();
+    
+    // Create road
+    road = new Road();
+    scene.add(road.object);
+    
+    // Create car
+    car = new Car(0, 0, 90);
+    car.object.rotation.y = Math.PI;
+    scene.add(car.object);
+    
     setupControls();
+    lastPointUpdate = performance.now();
 }
 
 init();

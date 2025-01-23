@@ -1,9 +1,12 @@
 /* Base styles */
-html, body {
-    overflow: hidden;
-    height: 100%;
+body { 
+    cursor: none;
     margin: 0;
-    padding: 0;
+    overflow: hidden;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
 }
 
 canvas { 
