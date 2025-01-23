@@ -42,50 +42,87 @@ const POINTS_LOSS_OFF_ROAD = -10;
 let isOnRoad = false;
 let gameStatus = 'playing'; // 'playing', 'won', 'failed'
 let lastPointUpdate = 0;
-
+let mapOpen = false;
+let currentDestination = null;
+let trafficLights = [];
+let navigationArrows = [];
+let parkingSpots = [];
 class Road {
     constructor() {
-        this.createRoad();
+        this.object = new THREE.Group();
+        this.createMainRoad();
+        this.createIntersections();
     }
 
-    createRoad() {
-        // Main road
-        const roadGeometry = new THREE.PlaneGeometry(10, 200);
-        const roadMaterial = new THREE.MeshStandardMaterial({ 
+    createMainRoad() {
+        // Create circular road
+        const roadRadius = 50;
+        const roadWidth = 10;
+        const segments = 64;
+
+        const roadGeometry = new THREE.RingGeometry(roadRadius - roadWidth/2, roadRadius + roadWidth/2, segments);
+        const roadMaterial = new THREE.MeshStandardMaterial({
             color: 0x333333,
-            roughness: 0.8,
+            roughness: 0.8
         });
-        this.road = new THREE.Mesh(roadGeometry, roadMaterial);
-        this.road.rotation.x = -Math.PI / 2;
-        this.road.position.y = 0.01; // Slightly above ground to prevent z-fighting
-        
-        // Road markings
-        const lineGeometry = new THREE.PlaneGeometry(0.3, 200);
-        const lineMaterial = new THREE.MeshStandardMaterial({ 
+
+        this.mainRoad = new THREE.Mesh(roadGeometry, roadMaterial);
+        this.mainRoad.rotation.x = -Math.PI / 2;
+        this.mainRoad.position.y = 0.01;
+
+        // Add lane markings
+        const innerLine = new THREE.RingGeometry(roadRadius - 0.15, roadRadius + 0.15, segments);
+        const lineMaterial = new THREE.MeshStandardMaterial({
             color: 0xFFFFFF,
             roughness: 0.5
         });
-        
-        this.centerLine = new THREE.Mesh(lineGeometry, lineMaterial);
+        this.centerLine = new THREE.Mesh(innerLine, lineMaterial);
         this.centerLine.rotation.x = -Math.PI / 2;
         this.centerLine.position.y = 0.02;
 
-        // Add to group
-        this.object = new THREE.Group();
-        this.object.add(this.road);
+        this.object.add(this.mainRoad);
         this.object.add(this.centerLine);
     }
 
+    createIntersections() {
+        // Add four intersections at cardinal points
+        const intersectionPoints = [
+            {x: 50, z: 0},
+            {x: -50, z: 0},
+            {x: 0, z: 50},
+            {x: 0, z: -50}
+        ];
+
+        intersectionPoints.forEach(point => {
+            const intersection = this.createIntersection();
+            intersection.position.set(point.x, 0, point.z);
+            this.object.add(intersection);
+        });
+    }
+
+    createIntersection() {
+        const group = new THREE.Group();
+        const size = 15;
+
+        const roadGeometry = new THREE.PlaneGeometry(size, size);
+        const roadMaterial = new THREE.MeshStandardMaterial({
+            color: 0x333333,
+            roughness: 0.8
+        });
+
+        const intersection = new THREE.Mesh(roadGeometry, roadMaterial);
+        intersection.rotation.x = -Math.PI / 2;
+        intersection.position.y = 0.01;
+
+        group.add(intersection);
+        return group;
+    }
+
     isPointOnRoad(point) {
-        // Convert point to road's local space
-        const localPoint = point.clone().sub(this.object.position);
-        localPoint.applyQuaternion(this.object.quaternion.clone().invert());
-        
-        // Check if point is within road bounds
-        return Math.abs(localPoint.x) < 5 && Math.abs(localPoint.z) < 100;
+        const distance = Math.sqrt(point.x * point.x + point.z * point.z);
+        return Math.abs(distance - 50) < 5;
     }
 }
-
 // Enhance Car class
 class Car {
     constructor(x, y, z) {
@@ -136,44 +173,390 @@ class Car {
         
         // Car properties
         this.speed = 0;
-        this.maxSpeed = 0.3;
-        this.acceleration = 0.01;
-        this.deceleration = 0.005;
-        this.turnSpeed = 0.03;
+        this.maxSpeed = 0.005; // Reduced max speed
+        this.acceleration = 0.005; // Reduced acceleration
+        this.deceleration = 0.003; // Reduced deceleration
+        this.turnSpeed = 0.002; // Reduced turn speed
+        this.targetSpeed = 0;
+        this.smoothFactor = 0.1;
     }
 
     update() {
-        if (isDriving) {
-            // Update speed
-            if (moveForward) {
-                this.speed = Math.min(this.speed + this.acceleration, this.maxSpeed);
-            } else if (moveBackward) {
-                this.speed = Math.max(this.speed - this.acceleration, -this.maxSpeed/2);
-            } else {
-                if (this.speed > 0) {
-                    this.speed = Math.max(0, this.speed - this.deceleration);
-                } else if (this.speed < 0) {
-                    this.speed = Math.min(0, this.speed + this.deceleration);
-                }
-            }
+        if (!isDriving) return;
 
-            // Apply movement
-            if (this.speed !== 0) {
-                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.object.quaternion);
-                this.object.position.addScaledVector(forward, this.speed);
+        // Update target speed based on input
+        if (moveForward) {
+            this.targetSpeed = this.maxSpeed;
+        } else if (moveBackward) {
+            this.targetSpeed = -this.maxSpeed / 2;
+        } else {
+            this.targetSpeed = 0;
+        }
 
+        // Smoothly interpolate current speed
+        this.speed += (this.targetSpeed - this.speed) * this.smoothFactor;
+
+        // Apply movement if speed isn't negligible
+        if (Math.abs(this.speed) > 0.001) {
+            const forward = new THREE.Vector3(0, 0, -1)
+                .applyQuaternion(this.object.quaternion)
+                .multiplyScalar(this.speed);
+
+            const nextPosition = this.object.position.clone().add(forward);
+
+            // Only check collisions with nearby obstacles
+            const nearbyObstacles = obstacles.filter(obstacle => 
+                obstacle.mesh.position.distanceTo(this.object.position) < 20
+            );
+
+            if (!CollisionSystem.getCollisionResponse(this.object, nearbyObstacles)) {
+                this.object.position.copy(nextPosition);
+                
                 // Update wheel rotation
-                const wheelSpeed = this.speed * 5;
+                const wheelSpeed = this.speed * 3;
                 this.wheels.forEach(wheel => wheel.rotation.x += wheelSpeed);
             }
-
-            // Apply turning
-            if (moveLeft) this.object.rotation.y += this.turnSpeed;
-            if (moveRight) this.object.rotation.y -= this.turnSpeed;
         }
+
+        // Smooth turning
+        if (moveLeft) this.object.rotation.y += this.turnSpeed;
+        if (moveRight) this.object.rotation.y -= this.turnSpeed;
+    }
+}
+class AICar extends Car {
+    constructor(x, y, z) {
+        super(x, y, z);
+        this.pathPoints = [];
+        this.currentPoint = 0;
+        this.generatePath();
+    }
+
+    generatePath() {
+        // Generate circular path points
+        const points = 36;
+        const radius = 50;
+        for (let i = 0; i < points; i++) {
+            const angle = (i / points) * Math.PI * 2;
+            this.pathPoints.push(new THREE.Vector3(
+                Math.cos(angle) * radius,
+                0,
+                Math.sin(angle) * radius
+            ));
+        }
+    }
+
+    update(time) {
+        const target = this.pathPoints[this.currentPoint];
+        const direction = target.clone().sub(this.object.position).normalize();
+        this.object.position.add(direction.multiplyScalar(0.1));
+        
+        if (this.object.position.distanceTo(target) < 0.5) {
+            this.currentPoint = (this.currentPoint + 1) % this.pathPoints.length;
+        }
+
+        this.object.lookAt(target);
+    }
+}
+const CAR_PHYSICS = {
+    maxSpeed: 0.15,
+    acceleration: 0.005,
+    deceleration: 0.003,
+    turnSpeed: 0.02
+};
+
+class TrafficLight {
+    constructor(x, y, z) {
+        this.object = new THREE.Group();
+        
+        // Pole
+        const poleGeometry = new THREE.CylinderGeometry(0.2, 0.2, 8, 8);
+        const poleMaterial = new THREE.MeshStandardMaterial({color: 0x333333});
+        this.pole = new THREE.Mesh(poleGeometry, poleMaterial);
+        
+        // Light housing
+        const housingGeometry = new THREE.BoxGeometry(1, 2.5, 1);
+        const housingMaterial = new THREE.MeshStandardMaterial({color: 0x222222});
+        this.housing = new THREE.Mesh(housingGeometry, housingMaterial);
+        this.housing.position.y = 4;
+        
+        // Lights
+        const lightGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+        this.redLight = new THREE.Mesh(
+            lightGeometry,
+            new THREE.MeshStandardMaterial({
+                emissive: 0x660000,
+                emissiveIntensity: 0.5
+            })
+        );
+        this.yellowLight = new THREE.Mesh(
+            lightGeometry,
+            new THREE.MeshStandardMaterial({
+                emissive: 0x666600,
+                emissiveIntensity: 0.5
+            })
+        );
+        this.greenLight = new THREE.Mesh(
+            lightGeometry,
+            new THREE.MeshStandardMaterial({
+                emissive: 0x006600,
+                emissiveIntensity: 0.5
+            })
+        );
+        
+        this.redLight.position.set(0, 4.8, 0);
+        this.yellowLight.position.set(0, 4, 0);
+        this.greenLight.position.set(0, 3.2, 0);
+        
+        this.object.add(this.pole);
+        this.object.add(this.housing);
+        this.object.add(this.redLight);
+        this.object.add(this.yellowLight);
+        this.object.add(this.greenLight);
+        
+        this.object.position.set(x, y, z);
+        this.state = 'red';
+        this.lastStateChange = 0;
+        this.updateLights();
+ 
+        // Traffic violation detection
+        this.violationBox = new THREE.Box3();
+        this.violationActive = false;
+        this.updateViolationBox();
+    }
+ 
+    updateViolationBox() {
+        const boxSize = new THREE.Vector3(10, 5, 10);
+        this.violationBox.setFromCenterAndSize(
+            this.object.position,
+            boxSize
+        );
+    }
+ 
+    updateLights() {
+        this.redLight.material.emissiveIntensity = this.state === 'red' ? 1 : 0.1;
+        this.yellowLight.material.emissiveIntensity = this.state === 'yellow' ? 1 : 0.1;
+        this.greenLight.material.emissiveIntensity = this.state === 'green' ? 1 : 0.1;
+    }
+ 
+    checkViolation(car) {
+        if ((this.state === 'red' || this.state === 'yellow') && 
+            this.violationBox.containsPoint(car.object.position) &&
+            !this.violationActive) {
+            this.violationActive = true;
+            showTrafficViolation();
+            points -= 50; // Penalty for running red light
+            return true;
+        }
+        if (!this.violationBox.containsPoint(car.object.position)) {
+            this.violationActive = false;
+        }
+        return false;
+    }
+    
+    update(time) {
+        if (time - this.lastStateChange > 5000) {
+            switch(this.state) {
+                case 'red':
+                    this.state = 'green';
+                    break;
+                case 'green':
+                    this.state = 'yellow';
+                    break;
+                case 'yellow':
+                    this.state = 'red';
+                    break;
+            }
+            this.lastStateChange = time;
+            this.updateLights();
+        }
+    }
+ }
+
+class NavigationArrow {
+    constructor() {
+        this.object = new THREE.Group();
+        
+        // Create floating arrow
+        const arrowShape = new THREE.Shape();
+        arrowShape.moveTo(0, 2);
+        arrowShape.lineTo(1, 0);
+        arrowShape.lineTo(0.3, 0);
+        arrowShape.lineTo(0.3, -1);
+        arrowShape.lineTo(-0.3, -1);
+        arrowShape.lineTo(-0.3, 0);
+        arrowShape.lineTo(-1, 0);
+        arrowShape.lineTo(0, 2);
+
+        const geometry = new THREE.ShapeGeometry(arrowShape);
+        const material = new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            transparent: true,
+            opacity: 0.8,
+            side: THREE.DoubleSide
+        });
+
+        this.arrow = new THREE.Mesh(geometry, material);
+        this.arrow.rotation.x = -Math.PI / 2;
+        
+        // Add floating animation
+        this.baseY = 3;
+        this.floatAmplitude = 0.5;
+        this.floatSpeed = 2;
+        
+        this.object.add(this.arrow);
+        this.object.position.y = this.baseY;
+    }
+
+    update(time) {
+        // Floating animation
+        this.object.position.y = this.baseY + 
+            Math.sin(time * 0.001 * this.floatSpeed) * this.floatAmplitude;
+        
+        // Scale animation
+        const scale = 1 + Math.sin(time * 0.002) * 0.1;
+        this.arrow.scale.set(scale, scale, scale);
+    }
+
+    pointTo(targetPos) {
+        const direction = new THREE.Vector3();
+        direction.subVectors(targetPos, car.object.position);
+        direction.y = 0;
+        
+        const angle = Math.atan2(direction.x, direction.z);
+        this.object.rotation.y = angle;
+        
+        // Position above car
+        this.object.position.x = car.object.position.x;
+        this.object.position.z = car.object.position.z;
     }
 }
 
+class ParkingSpot {
+    constructor(x, z, rotation = 0) {
+        this.position = new THREE.Vector3(x, 0, z);
+        
+        // Create parking spot markings
+        const geometry = new THREE.PlaneGeometry(3, 6);
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.8
+        });
+        
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.rotation.x = -Math.PI / 2;
+        this.mesh.position.set(x, 0.01, z);
+        this.mesh.rotation.y = rotation;
+    }
+}
+class CollisionSystem {
+    static check(object1, object2) {
+        const box1 = new THREE.Box3().setFromObject(object1);
+        const box2 = new THREE.Box3().setFromObject(object2);
+        return box1.intersectsBox(box2);
+    }
+
+    static getCollisionResponse(object, obstacles) {
+        const objectBox = new THREE.Box3().setFromObject(object);
+        for (const obstacle of obstacles) {
+            const obstacleBox = new THREE.Box3().setFromObject(obstacle.mesh || obstacle);
+            if (objectBox.intersectsBox(obstacleBox)) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+function createTrafficLights() {
+    const intersectionPoints = [
+        {x: 50, z: 0, rot: 0},
+        {x: -50, z: 0, rot: Math.PI},
+        {x: 0, z: 50, rot: -Math.PI/2},
+        {x: 0, z: -50, rot: Math.PI/2}
+    ];
+
+    intersectionPoints.forEach(point => {
+        const light = new TrafficLight(point.x, 0, point.z);
+        light.object.rotation.y = point.rot;
+        scene.add(light.object);
+        trafficLights.push(light);
+    });
+}
+function createMap() {
+    const map = document.createElement('div');
+    map.id = 'map';
+    map.style.cssText = `
+        position: fixed;
+        width: 200px;
+        height: 200px;
+        right: 20px;
+        bottom: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        border: 2px solid white;
+        overflow: hidden;
+        display: none;
+    `;
+
+    const minimapRenderer = new THREE.WebGLRenderer({ 
+        antialias: true,
+        alpha: true 
+    });
+    minimapRenderer.setSize(200, 200);
+    map.appendChild(minimapRenderer.domElement);
+
+    const minimapCamera = new THREE.OrthographicCamera(-100, 100, 100, -100, 1, 1000);
+    minimapCamera.position.set(0, 200, 0);
+    minimapCamera.lookAt(0, 0, 0);
+
+    document.body.appendChild(map);
+
+    return {
+        element: map,
+        renderer: minimapRenderer,
+        camera: minimapCamera,
+        update: function() {
+            if (mapOpen) {
+                minimapRenderer.render(scene, minimapCamera);
+            }
+        }
+    };
+}
+function showTrafficViolation() {
+    const violation = document.createElement('div');
+    violation.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(255, 0, 0, 0.8);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        z-index: 1000;
+    `;
+    violation.innerHTML = 'Traffic Violation! Running a red light.';
+    document.body.appendChild(violation);
+    setTimeout(() => violation.remove(), 3000);
+}
+function selectDestination(position) {
+    currentDestination = position;
+    toggleMap();
+    
+    // Show navigation arrow
+    if (!navigationArrows.length) {
+        const arrow = new NavigationArrow();
+        scene.add(arrow.mesh);
+        navigationArrows.push(arrow);
+    }
+}
+
+function toggleMap() {
+    mapOpen = !mapOpen;
+    gameMap.element.style.display = mapOpen ? 'block' : 'none';
+    if (mapOpen) {
+        gameMap.update();
+    }
+}
 // Enhanced game state management
 function updateGameState() {
     if (gameStatus !== 'playing') return;
@@ -394,6 +777,9 @@ function onKeyDown(event) {
         case 'ShiftLeft': moveUp = true; break;
         case 'Space': moveDown = true; break;
         case 'KeyE': isDriving = !isDriving; break;
+        case 'KeyM':
+        if (!event.repeat) toggleMap();
+        break;
         case 'Escape': 
             if (!event.repeat) {
                 isGamePaused = !isGamePaused;
@@ -422,7 +808,7 @@ function onKeyDown(event) {
             break;
     }
 }
-
+let gameMap;
 function onKeyUp(event) {
     switch(event.code) {
         case 'KeyW': moveForward = false; break;
@@ -464,43 +850,127 @@ function animate() {
     requestAnimationFrame(animate);
     
     if (!isGamePaused) {
+        const time = performance.now();
+        
         updatePlayerMovement();
         if (car) car.update();
         updateGameState();
+        
+        trafficLights.forEach(light => light.update(time));
+        
+        if (currentDestination && navigationArrows.length > 0) {
+            navigationArrows[0].pointTo(currentDestination);
+        }
+        
         renderer.render(scene, camera);
+        if (mapOpen) {
+            gameMap.update();
+        }
     }
 }
+function createBuildings() {
+    const buildingPositions = [
+        {x: -80, z: -80}, {x: 80, z: -80},
+        {x: -80, z: 80}, {x: 80, z: 80}
+    ];
 
+    buildingPositions.forEach(pos => {
+        const height = Math.random() * 30 + 20;
+        const building = new Cube(15, height, 15, pos.x, height/2, pos.z, 0x808080);
+        scene.add(building.mesh);
+        obstacles.push(building);
+    });
+}
 function init() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB);
+    scene.background = new THREE.Color(0x87CEEB); // Sky blue
     
+    // Camera setup
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
-    camera.position.y = 2;
+    camera.position.set(0, 2, 10);
     
+    // Renderer setup
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
+    // Create game elements
     interactionPrompt = createInteractionPrompt();
     setupLights();
     createSun();
     createFloor();
-    createObstacles();
     
-    // Create road
+    // Create road first
     road = new Road();
     scene.add(road.object);
     
-    // Create car
+    // Create traffic lights at intersections
+    const intersectionPoints = [
+        {x: 50, z: 0, rot: 0},
+        {x: -50, z: 0, rot: Math.PI},
+        {x: 0, z: 50, rot: -Math.PI/2},
+        {x: 0, z: -50, rot: Math.PI/2}
+    ];
+
+    intersectionPoints.forEach(point => {
+        const light = new TrafficLight(point.x, 0, point.z);
+        light.object.rotation.y = point.rot;
+        scene.add(light.object);
+        trafficLights.push(light);
+    });
+    createBuildings();
+    // Create parking spots
+    const parkingLocations = [
+        {x: 60, z: 60, rotation: Math.PI/4},
+        {x: -60, z: 60, rotation: -Math.PI/4},
+        {x: 60, z: -60, rotation: -Math.PI/4},
+        {x: -60, z: -60, rotation: Math.PI/4}
+    ];
+    
+    parkingLocations.forEach(loc => {
+        const spot = new ParkingSpot(loc.x, loc.z, loc.rotation);
+        scene.add(spot.mesh);
+        parkingSpots.push(spot);
+    });
+    
+    // Create obstacles away from roads
+    createObstacles();
+    const aiCars = [];
+    for (let i = 0; i < 5; i++) {
+        const angle = (i / 5) * Math.PI * 2;
+        const radius = 45;
+        const aiCar = new AICar(
+            Math.cos(angle) * radius,
+            0,
+            Math.sin(angle) * radius
+        );
+        scene.add(aiCar.object);
+        aiCars.push(aiCar);
+    }
+    
+    // Create car last
     car = new Car(0, 0, 90);
     car.object.rotation.y = Math.PI;
     scene.add(car.object);
     
+    // Initialize map
+    const minimapCamera = new THREE.OrthographicCamera(-100, 100, 100, -100, 1, 1000);
+    minimapCamera.position.y = 200;
+    minimapCamera.lookAt(0, 0, 0);
+    
+    const minimapRenderer = new THREE.WebGLRenderer({ antialias: true });
+    minimapRenderer.setSize(200, 200);
+    
+    gameMap = createMap();
+    
+    // Setup controls and game state
     setupControls();
     lastPointUpdate = performance.now();
+    
+    // Start animation loop
+    animate();
 }
 
 init();
