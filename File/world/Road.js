@@ -1,6 +1,3 @@
-
-
-
 export class Road {
     constructor() {
         this.object = new THREE.Group();
@@ -8,9 +5,7 @@ export class Road {
         this.intersections = [];
         this.createCityGrid();
     }
-    update(time) {
-        this.trafficLights.forEach(light => light.update(time));
-    }
+
     createCityGrid() {
         // Main grid parameters
         const gridSize = 200;
@@ -38,14 +33,7 @@ export class Road {
             2
         );
     }
-    this.trafficLights = [];
-    for (let i = -gridSize/2; i <= gridSize/2; i += blockSize) {
-        for (let j = -gridSize/2; j <= gridSize/2; j += blockSize) {
-            const light = new TrafficLight(i, 0, j);
-            this.object.add(light.object);
-            this.trafficLights.push(light);
-        }
-    }
+
     const asphaltTexture = new THREE.CanvasTexture(canvas);
     asphaltTexture.wrapS = THREE.RepeatWrapping;
     asphaltTexture.wrapT = THREE.RepeatWrapping;

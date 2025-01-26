@@ -310,17 +310,6 @@ export class Game {
         if (this.isGamePaused) return;
 
         const currentTime = performance.now();
-        
-        // Update road and traffic lights
-        this.road.update(currentTime);
-        
-        // Check car proximity
-        if (!this.isDriving) {
-            const distToCar = this.camera.position.distanceTo(this.playerCar.object.position);
-            this.prompt.style.display = distToCar < 5 ? 'block' : 'none';
-        } else {
-            this.prompt.style.display = 'none';
-        }
         const deltaTime = (currentTime - this.lastTime) / 1000;
         this.lastTime = currentTime;
 
